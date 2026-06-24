@@ -87,26 +87,37 @@ jobs:
           draft: false
           prerelease: false
 
-      # ---------------------------------------------------------------------
-      # Future: post to Discord on release.
-      # Add a repository secret called DISCORD_WEBHOOK_URL and uncomment the
-      # step below. The webhook URL is created in Discord under:
-      # Server Settings -> Integrations -> Webhooks -> New Webhook.
-      # ---------------------------------------------------------------------
-      # - name: Announce on Discord
-      #   if: env.DISCORD_WEBHOOK_URL != ''
-      #   env:
-      #     DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-      #   run: |
-      #     VERSION="${{ steps.ver.outputs.version }}"
-      #     NOTES=$(jq -Rs . < release-notes.md)
-      #     curl -H "Content-Type: application/json" -X POST "$DISCORD_WEBHOOK_URL" -d @- <<EOF
-      #     {
-      #       "content": "🧩 **AffixDex ${VERSION}** is out — https://github.com/kwilliams312/AffixDex/releases/tag/v${VERSION}",
-      #       "embeds": [{
-      #         "title": "AffixDex ${VERSION}",
-      #         "url": "https://github.com/kwilliams312/AffixDex/releases/tag/v${VERSION}",
-      #         "description": ${NOTES}
-      #       }]
-      #     }
-      #     EOF
+      # Post a release announcement to Discord. The webhook URL is stored as a
+      # GitHub Actions Secret (DISCORD_WEBHOOK_URL) and never lives in the repo.
+      # If the secret is unset the step exits cleanly so the release still works.
+      - name: Announce on Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "DISCORD_WEBHOOK_URL secret is not set — skipping Discord announce."
+            exit 0
+          fi
+          # Discord embed description limit is 4096 chars; truncate just in case.
+          head -c 3800 release-notes.md > notes-trimmed.md
+          # jq -Rs builds a JSON-safe quoted string from the file contents.
+          NOTES_JSON=$(jq -Rs . < notes-trimmed.md)
+          PAYLOAD=$(cat <<JSON
+          {
+            "content": "🧩 **AffixDex ${VERSION}** released — https://github.com/kwilliams312/AffixDex/releases/tag/v${VERSION}",
+            "embeds": [{
+              "title": "AffixDex ${VERSION}",
+              "url": "https://github.com/kwilliams312/AffixDex/releases/tag/v${VERSION}",
+              "description": ${NOTES_JSON},
+              "color": 3447003
+            }]
+          }
+          JSON
+          )
+          # Post to Discord. -f makes curl exit non-zero on HTTP errors so the
+          # workflow surfaces problems instead of failing silently.
+          curl -fsS -H "Content-Type: application/json" \
+               -X POST "$DISCORD_WEBHOOK_URL" \
+               -d "$PAYLOAD"
+          echo "Discord announce posted."
