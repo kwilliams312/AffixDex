@@ -30,7 +30,7 @@ local ADDON = "AffixDex"
 
 -- Addon version (semver) - read from the .toc so it's a single source of truth.
 -- Bump this freely for any release (features, fixes, cosmetics).
-local VERSION = (GetAddOnMetadata and GetAddOnMetadata("AffixDex", "Version")) or "1.5.3"
+local VERSION = (GetAddOnMetadata and GetAddOnMetadata("AffixDex", "Version")) or "1.6.0"
 
 -- Wire-protocol version for party sharing - SEPARATE from the display version.
 -- Only bump this when the addon-message FORMAT or SEMANTICS change. Clients
@@ -122,6 +122,7 @@ local setAffixIcon
 local recordLearned
 local DB
 local ADB
+local affixProcDescriptionsStale = true  -- forward upvalue: invalidated by refresh helpers, rebuilt lazily in parseItemAffix
 
 -- Write the current runtime catalog to AffixDexDB so it survives logout. The
 -- persisted catalog is the source of truth for the display next session even if
@@ -183,6 +184,7 @@ local function refreshAffixCatalog()
 	serverCatalogLoaded = true
 	applyAliases()
 	persistCatalog()
+	affixProcDescriptionsStale = true   -- rebuild proc-text cache on next item parse
 	return true
 end
 
@@ -319,6 +321,127 @@ local function ensureScanTooltip()
 	scanTooltip = CreateFrame("GameTooltip", "AffixDexScanTooltip", nil, "GameTooltipTemplate")
 	scanTooltip:SetOwner(WorldFrame, "ANCHOR_NONE")
 	return scanTooltip
+end
+
+-- A SECOND hidden tooltip used only for fetching spell descriptions (so building
+-- the proc-text cache doesn't clobber the item-scan tooltip mid-parse).
+local spellScanTooltip
+local function ensureSpellScanTooltip()
+	if spellScanTooltip or not CreateFrame then return spellScanTooltip end
+	spellScanTooltip = CreateFrame("GameTooltip", "AffixDexSpellScanTooltip", nil, "GameTooltipTemplate")
+	spellScanTooltip:SetOwner(WorldFrame, "ANCHOR_NONE")
+	return spellScanTooltip
+end
+
+-- ---------------------------------------------------------------------------
+-- Fixed-affix weapon detection via proc-text matching.
+--
+-- Some weapons (legendary or named items like "The Judge's Gavel") carry an
+-- inherent affix that never has its name in the item's tooltip - only the
+-- proc-effect text ("Chance on hit: Stuns target for 3 sec."). They also have
+-- no random-property suffix, so the normal random-suffix scan misses them.
+--
+-- Approach: for each WEAPON affix in ExtractionService.learnedAffixes, fetch
+-- its spell description via GetSpellDescription (same approach as PE's own
+-- helper), normalise it (strip numbers, color codes, "Chance on hit:" prefix,
+-- etc.), and cache it. When we scan an item that has no random suffix, look
+-- for any of those cached descriptions inside its tooltip lines.
+-- ---------------------------------------------------------------------------
+
+-- [affixName] = { raw = "...", normalized = "...", spellId = N }
+-- affixProcDescriptionsStale is forward-declared near the top of the file so the
+-- refresh helpers above can invalidate it.
+local affixProcDescriptions
+
+-- Lowercase + strip everything that varies between items / between spell and
+-- item wording (color codes, numbers, "Chance on hit:" prefix, var refs).
+local function normalizeProcText(s)
+	if type(s) ~= "string" then return "" end
+	s = s:lower()
+	s = s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")  -- WoW color escapes
+	s = s:gsub("^chance on hit%s*:?%s*", "")             -- items prefix this
+	s = s:gsub("^chance on hit%s*", "")
+	s = s:gsub("^chance to strike[^:]-:?%s*", "")        -- ranged variant
+	s = s:gsub("%$[%a]+", "")                            -- $a, $d, $s placeholders
+	s = s:gsub("%d+%.?%d*", "")                          -- numbers (durations, damage)
+	s = s:gsub("[%s%.,;:!?]+", " ")                      -- normalise punctuation/spaces
+	s = s:gsub("^%s+", ""):gsub("%s+$", "")
+	return s
+end
+
+local function getSpellDescription(spellId)
+	if not spellId then return nil end
+	local tip = ensureSpellScanTooltip()
+	if not tip then return nil end
+	tip:SetOwner(WorldFrame, "ANCHOR_NONE")
+	tip:ClearLines()
+	local ok = pcall(function() tip:SetHyperlink("spell:" .. spellId) end)
+	if not ok then return nil end
+	local n = tip:NumLines() or 0
+	if n < 2 then return nil end
+	local lines = {}
+	for i = 2, n do
+		local lineObj = _G["AffixDexSpellScanTooltipTextLeft" .. i]
+		local text = lineObj and lineObj.GetText and lineObj:GetText()
+		if text and text ~= "" then lines[#lines + 1] = text end
+	end
+	return table.concat(lines, "\n")
+end
+
+-- Build the proc cache from ExtractionService.learnedAffixes. Called lazily.
+local function buildProcDescriptionCache()
+	affixProcDescriptions = {}
+	affixProcDescriptionsStale = false
+	local svc = _G.ExtractionService
+	if not svc or not svc.learnedAffixes or #svc.learnedAffixes == 0 then return end
+	-- Dedup by canonical affix name so we only have one entry per weapon affix.
+	local seenName = {}
+	for _, affix in ipairs(svc.learnedAffixes) do
+		if affix.weaponOnly and type(affix.name) == "string" and affix.id and not seenName[affix.name] then
+			seenName[affix.name] = true
+			local desc = getSpellDescription(affix.id)
+			if desc and desc ~= "" then
+				local norm = normalizeProcText(desc)
+				if norm ~= "" then
+					affixProcDescriptions[affix.name] = {
+						raw = desc, normalized = norm, spellId = affix.id,
+					}
+				end
+			end
+		end
+	end
+end
+
+-- Walk the item's tooltip lines (already populated into scanTooltip by the
+-- caller) and return the canonical affix name whose proc description best
+-- matches. "Best" = longest normalized description matched, so a more specific
+-- affix beats a more generic one. nil if no match.
+local function detectFixedAffixByProc(numLines)
+	if affixProcDescriptionsStale then buildProcDescriptionCache() end
+	if not affixProcDescriptions or not next(affixProcDescriptions) then return nil end
+
+	local bestName, bestLen
+	for j = 1, numLines do
+		local lineObj = _G["AffixDexScanTooltipTextLeft" .. j]
+		local text = lineObj and lineObj.GetText and lineObj:GetText()
+		if text and text ~= "" then
+			local normLine = normalizeProcText(text)
+			if normLine ~= "" then
+				for affixName, descData in pairs(affixProcDescriptions) do
+					local descNorm = descData.normalized
+					if descNorm ~= "" and (normLine == descNorm
+							or normLine:find(descNorm, 1, true)
+							or descNorm:find(normLine, 1, true)) then
+						local matchLen = #descNorm
+						if not bestLen or matchLen > bestLen then
+							bestName, bestLen = affixName, matchLen
+						end
+					end
+				end
+			end
+		end
+	end
+	return bestName
 end
 
 -- Register a newly-discovered RANKED affix (found on a spell or item but not in
@@ -534,13 +657,11 @@ local function hasRank(affix, roman) return hasRankIn(DB().learned, affix, roman
 local function parseItemAffix(link)
 	if type(link) ~= "string" or link == "" then return nil end
 	if not link:find("|H", 1, true) then return nil end           -- need a real link
-	if not HasRandomProperty(link) then return nil end             -- server flag
 
-	-- Slot-based gate: ranked affixes only on armor/shirt/tabard/shield, weapon
-	-- affixes only on weapons. Items in any other slot (rings, necks, trinkets,
-	-- non-equipment) are rejected outright. GetItemInfo cache misses (nil) fall
-	-- through and allow both families - we'd rather over-detect on a cache miss
-	-- than miss a real affixed item.
+	-- Slot-based gate: ranked affixes only on armor/shirt/tabard/shield/jewelry,
+	-- weapon affixes only on weapons. Items in any other slot (non-equippable
+	-- things) are rejected outright. GetItemInfo cache misses (nil) fall through
+	-- and allow both families.
 	local allowRanked, allowWeapon = true, true
 	if GetItemInfo then
 		local _, _, _, _, _, _, _, _, equipLoc = GetItemInfo(link)
@@ -555,6 +676,12 @@ local function parseItemAffix(link)
 		end
 	end
 
+	-- If the item has no random-property suffix AND isn't a weapon slot, there's
+	-- nothing to detect (random-suffix scan needs the suffix; fixed-affix scan
+	-- only applies to weapons).
+	local hasRP = HasRandomProperty(link)
+	if not hasRP and not allowWeapon then return nil end
+
 	local tip = ensureScanTooltip()
 	if not tip then return nil end
 	tip:SetOwner(WorldFrame, "ANCHOR_NONE")
@@ -562,6 +689,24 @@ local function parseItemAffix(link)
 	tip:SetHyperlink(link)
 	local n = tip:NumLines() or 0
 	if n == 0 then return nil end
+
+	-- Fixed-affix weapon detection: match the item's proc text against the
+	-- spell-description cache built from ProjectEbonhold's affix list. This
+	-- handles legendary/named weapons (Judge's Gavel, Stormherald, etc.) whose
+	-- tooltip shows the proc effect but never the affix name.
+	if allowWeapon then
+		local matchedAffix = detectFixedAffixByProc(n)
+		if matchedAffix then
+			local key = matchedAffix:lower()
+			if affixCanonical[key] then
+				return affixCanonical[key], nil, true
+			end
+		end
+	end
+
+	-- Random-suffix path: items without a random property can't match below
+	-- (the name-based scan needs the suffix to be appended to the item name).
+	if not hasRP then return nil end
 
 	for j = 1, n do
 		local lineObj = _G["AffixDexScanTooltipTextLeft" .. j]
@@ -1922,6 +2067,21 @@ SlashCmdList["AFFIXDEX"] = function(arg)
 			or "bundled fallback"))
 		msg(("ranked (%d): |cffffffff%s|r"):format(#rk, table.concat(rk, ", ")))
 		msg(("weapon (%d): |cffffffff%s|r"):format(#wp, table.concat(wp, ", ")))
+	elseif cmd == "procs" then
+		-- Dump the proc-text cache used for fixed-affix weapon detection.
+		if affixProcDescriptionsStale then buildProcDescriptionCache() end
+		if not affixProcDescriptions or not next(affixProcDescriptions) then
+			msg("proc cache is empty (no ProjectEbonhold weapon-affix descriptions cached)")
+		else
+			local names = {}
+			for k in pairs(affixProcDescriptions) do names[#names + 1] = k end
+			table.sort(names)
+			msg(("proc cache (%d entries):"):format(#names))
+			for _, name in ipairs(names) do
+				local d = affixProcDescriptions[name]
+				msg(("  |cff66ccff%s|r  -> |cffaaaaaa%s|r"):format(name, d.normalized))
+			end
+		end
 	elseif cmd == "resetcatalog" then
 		-- Wipe the persisted catalog. Next refresh from ProjectEbonhold will
 		-- rewrite it cleanly from the server.
@@ -1948,7 +2108,7 @@ SlashCmdList["AFFIXDEX"] = function(arg)
 	elseif cmd == "" or cmd == "show" or cmd == "toggle" then
 		Toggle()
 	else
-		msg("commands: /adex (toggle), scan, gear, catalog, resetcatalog, cleardiscovered, tabs, tab <n>")
+		msg("commands: /adex (toggle), scan, gear, catalog, procs, resetcatalog, cleardiscovered, tabs, tab <n>")
 	end
 end
 

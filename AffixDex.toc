@@ -2,7 +2,7 @@
 ## Title: AffixDex
 ## Notes: Tracks which Project Ebonhold affixes (and ranks) you have learned. Type /adex to open.
 ## Author: Noturpalguy
-## Version: 1.5.3
+## Version: 1.6.0
 ## X-Email: kwillia@gmail.com
 ## X-Website: https://github.com/kwilliams312/AffixDex
 ## SavedVariables: AffixDexDB
