@@ -123,6 +123,7 @@ local recordLearned
 local DB
 local ADB
 local affixProcDescriptionsStale = true  -- forward upvalue: invalidated by refresh helpers, rebuilt lazily in parseItemAffix
+local affixDescriptionsStale     = true  -- forward upvalue: raw spell-tooltip text cache for the affix hover tooltip
 
 -- Write the current runtime catalog to AffixDexDB so it survives logout. The
 -- persisted catalog is the source of truth for the display next session even if
@@ -185,6 +186,7 @@ local function refreshAffixCatalog()
 	applyAliases()
 	persistCatalog()
 	affixProcDescriptionsStale = true   -- rebuild proc-text cache on next item parse
+	affixDescriptionsStale     = true   -- rebuild raw-description cache on next hover
 	return true
 end
 
@@ -407,6 +409,65 @@ local function buildProcDescriptionCache()
 						raw = desc, normalized = norm, spellId = affix.id,
 					}
 				end
+			end
+		end
+	end
+end
+
+-- ---------------------------------------------------------------------------
+-- Affix description cache (for the hover tooltip on each grid row).
+--
+-- Like the proc cache above, but stores RAW spell-tooltip text for ALL affixes
+-- (both ranked and weapon), keyed by canonical base name (not the full spell
+-- name with a rank suffix). For ranked affixes we pick the "best" rank to show
+-- - highest learned tier first, falling back to highest tier seen - so the
+-- tooltip describes the affix at the strongest version you know.
+-- ---------------------------------------------------------------------------
+
+-- [baseName] = { raw = "Stuns target for 3 sec.", spellId = N }
+local affixDescriptions
+
+local TIER_TO_NUM = { I = 1, II = 2, III = 3, IV = 4, V = 5, VI = 6, VII = 7, VIII = 8, IX = 9, X = 10 }
+
+local function buildAffixDescriptionCache()
+	affixDescriptions = {}
+	affixDescriptionsStale = false
+	local svc = _G.ExtractionService
+	if not svc or not svc.learnedAffixes or #svc.learnedAffixes == 0 then return end
+
+	-- Group affixes by base name; remember each tier's entry.
+	-- groups[baseName] = { tiers = { [tierNum] = affix }, weaponOnly = bool }
+	local groups = {}
+	for _, affix in ipairs(svc.learnedAffixes) do
+		if type(affix.name) == "string" and affix.id then
+			local base, tier = affix.name:match("^(.-)%s+([IVXLCivxlc]+)$")
+			if not base then base = affix.name end
+			local tierNum = (tier and TIER_TO_NUM[tier:upper()]) or 0
+			local g = groups[base]
+			if not g then g = { tiers = {}, weaponOnly = affix.weaponOnly }; groups[base] = g end
+			g.tiers[tierNum] = affix
+		end
+	end
+
+	-- For each group, pick the best representative and fetch its spell tooltip.
+	for baseName, group in pairs(groups) do
+		local best
+		-- Prefer the highest LEARNED tier.
+		for tierNum = 10, 0, -1 do
+			local a = group.tiers[tierNum]
+			if a and a.learned then best = a; break end
+		end
+		-- Otherwise fall back to the highest tier we know about.
+		if not best then
+			for tierNum = 10, 0, -1 do
+				local a = group.tiers[tierNum]
+				if a then best = a; break end
+			end
+		end
+		if best then
+			local desc = getSpellDescription(best.id)
+			if desc and desc ~= "" then
+				affixDescriptions[baseName] = { raw = desc, spellId = best.id }
 			end
 		end
 	end
@@ -1246,6 +1307,14 @@ local function RowTooltip(row)
   end
   if currentView ~= "You" then
     GameTooltip:AddLine(currentView .. ": " .. (isLearnedIn(viewSource(), affix) and "has it" or "does not have it"), 0.75, 0.75, 0.8)
+  end
+  -- Spell description from the server (cached lazily). For ranked affixes the
+  -- cache picks the highest learned tier (or highest tier seen) so the text
+  -- describes the strongest version of the affix you know.
+  if affixDescriptionsStale then buildAffixDescriptionCache() end
+  if affixDescriptions and affixDescriptions[affix] and affixDescriptions[affix].raw then
+    GameTooltip:AddLine(" ")  -- spacer
+    GameTooltip:AddLine(affixDescriptions[affix].raw, 0.85, 0.85, 0.95, true)  -- wrap=true
   end
   GameTooltip:Show()
 end

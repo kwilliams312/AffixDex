@@ -5,6 +5,7 @@
 ### Added
 - **Fixed-affix legendary weapons are now detected.** Items like *The Judge's Gavel*, *Stormherald*, or any named weapon whose tooltip shows only the proc effect ("Chance on hit: Stuns target for 3 sec.") instead of the affix name are now correctly identified. AffixDex caches each weapon affix's proc description (fetched from the server's spell tooltip via ProjectEbonhold's affix list) and matches item proc text against it dynamically — no hand-maintained item-ID table required.
 - `/adex procs` — debug command that dumps the cached proc descriptions, so you can see what each weapon affix's normalized description looks like and which ones AffixDex has on file.
+- **Affix descriptions in the row tooltip.** Hovering an affix's icon or name in the grid now shows the affix's actual in-game spell description. For ranked affixes the tooltip describes the strongest version you've learned (or the highest rank known if you haven't learned any). Pulled from ProjectEbonhold's affix list automatically — nothing hard-coded.
 
 ## 1.5.3
 
