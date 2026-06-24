@@ -3,12 +3,14 @@
 ## 1.6.0
 
 ### Added
+- `/adex version` (alias `/adex ver`) — prints the addon version and the party-sharing wire-protocol version.
 - **Fixed-affix legendary weapons are now detected.** Items like *The Judge's Gavel*, *Stormherald*, or any named weapon whose tooltip shows only the proc effect ("Chance on hit: Stuns target for 3 sec.") instead of the affix name are now correctly identified. AffixDex caches each weapon affix's proc description (fetched from the server's spell tooltip via ProjectEbonhold's affix list) and matches item proc text against it dynamically — no hand-maintained item-ID table required.
 - `/adex procs` — debug command that dumps the cached proc descriptions, so you can see what each weapon affix's normalized description looks like and which ones AffixDex has on file.
 - **Affix descriptions in the row tooltip.** Hovering an affix's icon or name in the grid now shows the affix's actual in-game spell description. For ranked affixes the tooltip describes the strongest version you've learned (or the highest rank known if you haven't learned any). Pulled from ProjectEbonhold's affix list automatically — nothing hard-coded.
 
 ### Fixed (also in 1.6.0, pre-release iteration)
 - The proc-text matcher no longer misattributes random-suffix weapons. `Wand of Allistarj of Glaciation` was being flagged as Keeper's Sting because "ranged target" in the wand tooltip happened to substring-match Keeper's Sting's spell description. The matcher now (a) only runs on weapons that have NO random-property suffix (real fixed-affix candidates), and (b) requires the matched line to start with "Chance on hit:"/"Chance to strike" AND the affix description to be the start of that line — set-bonus / stat / flavor text can't match anymore.
+- The name-scan now strips embedded color escape codes before parsing. Items where Ebonhold renders the affix portion in a custom color (e.g. `Misery's End |cff800080of Keen Strikes III|r`) used to come back as "(no affix detected)" because the hex digits of the color code looked like word characters to the boundary check and broke the match.
 - The name-scan no longer matches affix words **mid-line**. Items with set-bonus text like `Set: Increases Bladestorm damage by 10%` were being flagged as having the Bladestorm affix because the word appeared in the tooltip. Affix names are now only recognised when they appear at the **end of a line** (which is where the random suffix always sits), so set bonuses, flavor text, and class-ability mentions are ignored.
 
 ## 1.5.3

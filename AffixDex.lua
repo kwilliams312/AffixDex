@@ -803,7 +803,13 @@ local function parseItemAffix(link)
 		local lineObj = _G["AffixDexScanTooltipTextLeft" .. j]
 		local text = lineObj and lineObj.GetText and lineObj:GetText()
 		if text and text ~= "" then
-			local lower = text:lower()
+			-- Strip color escape codes. Ebonhold sometimes wraps the affix
+			-- portion of a line in |cff...|r (e.g. "Misery's End |cff800080of
+			-- Keen Strikes III|r"). Hex digits inside the color code look like
+			-- word chars to the boundary check below, which would reject the
+			-- otherwise-valid match.
+			local clean = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+			local lower = clean:lower()
 			for affixLower, canonical in pairs(affixCanonical) do
 				local isWeapon = affixWeapon[affixLower]
 				if (isWeapon and allowWeapon) or (not isWeapon and allowRanked) then
@@ -2214,10 +2220,12 @@ SlashCmdList["AFFIXDEX"] = function(arg)
 		Scan()
 		msg(("cleared %d discovered affix(es); re-scanned spellbook."):format(n))
 		if frame and frame:IsShown() then Refresh() end
+	elseif cmd == "version" or cmd == "ver" then
+		msg(("AffixDex |cff66ccff%s|r  (wire protocol |cff66ccff%d|r)"):format(VERSION, PROTOCOL))
 	elseif cmd == "" or cmd == "show" or cmd == "toggle" then
 		Toggle()
 	else
-		msg("commands: /adex (toggle), scan, gear, catalog, procs, resetcatalog, cleardiscovered, tabs, tab <n>")
+		msg("commands: /adex (toggle), scan, gear, catalog, procs, version, resetcatalog, cleardiscovered, tabs, tab <n>")
 	end
 end
 
