@@ -1,0 +1,13 @@
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Lua build artifacts
+luac.out
+
+# WoW addon dev — never commit user saved-variable dumps
+WTF/
+*.lua.bak
