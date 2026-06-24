@@ -1058,6 +1058,15 @@ local COL_START  = 168   -- where rank columns begin (within a row)
 local COL_WIDTH  = 26
 local CHECK_SIZE = 16
 
+-- View-tabs row: tabs wrap to subsequent rows when they would spill past the
+-- right edge of the frame; everything below the tab bar shifts down by
+-- (rowsUsed - 1) * TAB_BAR_ROW_H so the grid never gets pushed off-screen.
+local TAB_BAR_Y         = -60   -- y of the first tab row (frame-relative)
+local TAB_BAR_LEFT      = 50    -- x of the first tab on each row
+local TAB_BAR_RIGHT_PAD = 14    -- right margin before wrapping
+local TAB_BAR_ROW_H     = 20    -- per-row height (18px pill + 2px gap)
+local TAB_BAR_MAX_ROWS  = 3     -- cap; overflow falls back to the Saved dropdown
+
 -- flat dark palette (teal / purple accents)
 local PAL = {
 	bg      = { 0.05, 0.06, 0.08, 0.95 },
@@ -1390,6 +1399,44 @@ local function CellTooltip(anchor, affix, roman)
   return true
 end
 
+-- Reflow everything below the View tab bar so the grid never gets pushed
+-- off-screen when the tabs wrap onto a second/third row. Repins the column
+-- header, the rank-number cells, the underline, and the scroll frame's top
+-- anchor, and grows the window height by the same delta so the bottom
+-- status bar (which is BOTTOM-anchored) keeps the same distance from the
+-- grid.
+local FRAME_HEIGHT_BASE = 462
+local function applyTabBarRows(rowsUsed)
+  if not frame then return end
+  rowsUsed = math.max(1, math.min(TAB_BAR_MAX_ROWS, rowsUsed or 1))
+  if frame._tabRowsApplied == rowsUsed then return end
+  frame._tabRowsApplied = rowsUsed
+  local extra = (rowsUsed - 1) * TAB_BAR_ROW_H
+
+  if frame.colHeader then
+    frame.colHeader:ClearAllPoints()
+    frame.colHeader:SetPoint("TOPLEFT", frame, "TOPLEFT", ROW_X + 2, -89 - extra)
+  end
+  if headerCells then
+    for c, fs in ipairs(headerCells) do
+      fs:ClearAllPoints()
+      fs:SetPoint("CENTER", frame, "TOPLEFT",
+        ROW_X + COL_START + (c - 1) * COL_WIDTH + COL_WIDTH / 2, -91 - extra)
+    end
+  end
+  if frame.tabUnderline then
+    frame.tabUnderline:ClearAllPoints()
+    frame.tabUnderline:SetPoint("TOPLEFT",  frame, "TOPLEFT",   ROW_X, -103 - extra)
+    frame.tabUnderline:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -ROW_X, -103 - extra)
+  end
+  if scroll then
+    scroll:ClearAllPoints()
+    scroll:SetPoint("TOPLEFT",     frame, "TOPLEFT",     ROW_X, -107 - extra)
+    scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -28, 34)
+  end
+  frame:SetHeight(FRAME_HEIGHT_BASE + extra)
+end
+
 -- (Re)label the "View:" buttons: You + live party, then saved-snapshot players
 -- matching the search box (most-recently-seen first), capped at the button count.
 local function updateMembers()
@@ -1427,7 +1474,12 @@ local function updateMembers()
 
   if currentView ~= "You" and not haveData(currentView) then currentView = "You" end
 
-  local x = 50
+  local rightLimit = frame:GetWidth() - TAB_BAR_RIGHT_PAD
+  local x          = TAB_BAR_LEFT
+  local y          = TAB_BAR_Y
+  local row        = 1
+  local rowHasAny  = false
+
   for i, b in ipairs(frame.memberButtons) do
     local nm = names[i]
     if nm then
@@ -1435,10 +1487,28 @@ local function updateMembers()
       -- removable = a saved/offline player (not You, not currently in your party)
       local removable = (nm ~= "You") and not livePartySet[nm] and ADB().snapshots[nm] ~= nil
       b:SetText((nm ~= "You" and mismatch[nm] and not haveData(nm)) and (nm .. "!") or nm)
-      b:SetWidth(math.max(34, b:GetFontString():GetStringWidth() + 16 + (removable and 12 or 0)))
+      local w = math.max(34, b:GetFontString():GetStringWidth() + 16 + (removable and 12 or 0))
+      b:SetWidth(w)
+
+      -- Wrap to the next row when this tab would overflow. Always place at
+      -- least one tab per row, otherwise a single oversized tab would loop.
+      if rowHasAny and x + w > rightLimit then
+        if row >= TAB_BAR_MAX_ROWS then
+          -- No more rows: hide this and every remaining slot. The user can
+          -- still reach the overflowed tabs via the Saved dropdown / search.
+          for k = i, #frame.memberButtons do frame.memberButtons[k]:Hide() end
+          break
+        end
+        row = row + 1
+        x = TAB_BAR_LEFT
+        y = TAB_BAR_Y - (row - 1) * TAB_BAR_ROW_H
+        rowHasAny = false
+      end
+
       b:ClearAllPoints()
-      b:SetPoint("TOPLEFT", frame, "TOPLEFT", x, -60)
-      x = x + b:GetWidth() + 4
+      b:SetPoint("TOPLEFT", frame, "TOPLEFT", x, y)
+      x = x + w + 4
+      rowHasAny = true
       pillSelected(b, nm == currentView)
       if haveData(nm) then b:Enable() else b:Disable(); b.text:SetTextColor(unpack(PAL.dim)) end
       if removable then b.removeBtn:Show() else b.removeBtn:Hide() end
@@ -1447,6 +1517,8 @@ local function updateMembers()
       b:Hide()
     end
   end
+
+  applyTabBarRows(row)
 end
 
 -- Builds the saved-players dropdown (respects the search filter), most-recent first.
@@ -1612,10 +1684,10 @@ local function CreateUI()
     frame.memberButtons[i] = b
   end
 
-  local colHeader = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  colHeader:SetPoint("TOPLEFT", frame, "TOPLEFT", ROW_X + 2, -89)
-  colHeader:SetText("Affix")
-  colHeader:SetTextColor(unpack(PAL.dim))
+  frame.colHeader = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  frame.colHeader:SetPoint("TOPLEFT", frame, "TOPLEFT", ROW_X + 2, -89)
+  frame.colHeader:SetText("Affix")
+  frame.colHeader:SetTextColor(unpack(PAL.dim))
 
   headerCells = {}
   for c = 1, #NUM_TO_ROMAN do
@@ -1626,12 +1698,12 @@ local function CreateUI()
     headerCells[c] = fs
   end
 
-  local underline = frame:CreateTexture(nil, "ARTWORK")
-  underline:SetTexture(WHITE_TEX)
-  underline:SetHeight(1)
-  underline:SetPoint("TOPLEFT", frame, "TOPLEFT", ROW_X, -103)
-  underline:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -ROW_X, -103)
-  underline:SetVertexColor(PAL.border[1], PAL.border[2], PAL.border[3], 0.45)
+  frame.tabUnderline = frame:CreateTexture(nil, "ARTWORK")
+  frame.tabUnderline:SetTexture(WHITE_TEX)
+  frame.tabUnderline:SetHeight(1)
+  frame.tabUnderline:SetPoint("TOPLEFT", frame, "TOPLEFT", ROW_X, -103)
+  frame.tabUnderline:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -ROW_X, -103)
+  frame.tabUnderline:SetVertexColor(PAL.border[1], PAL.border[2], PAL.border[3], 0.45)
 
   scroll = CreateFrame("ScrollFrame", "AffixDexScroll", frame, "FauxScrollFrameTemplate")
   scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", ROW_X, -107)

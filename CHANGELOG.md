@@ -5,6 +5,9 @@
 ### Added
 - `/adex version` (alias `/adex ver`) — prints the addon version and the party-sharing wire-protocol version.
 
+### Changed
+- **The View tabs row now wraps.** A long backlog of saved players or a wide party used to spill the tab pills off the right edge of the window. Tabs now flow onto a second (and, if needed, third) row, and the grid below shifts down by the same amount so nothing is hidden. Capped at 3 rows — anything beyond that is still reachable via the search box and the Saved dropdown.
+
 ### Fixed
 - **Ranked affixes on weapons are now detected.** Weapons like `Misery's End of Keen Strikes III`, `Symbol of Transgression of Arcane Mind IV`, or `Rod of Imprisoned Souls of Overwhelming Force II` came back as "(no affix detected)" because the slot filter was treating ranked affixes as armor-only. On Ebonhold the ranked affix families can appear on either a weapon OR a piece of armor, so the weapon slot now allows both weapon and ranked affixes (armor slots are still restricted to ranked — weapon procs don't apply to armor).
 - The name-scan now strips embedded color escape codes before parsing. Items where Ebonhold renders the affix portion in a custom color (e.g. `Misery's End |cff800080of Keen Strikes III|r`) used to come back as "(no affix detected)" because the hex digits of the color code looked like word characters to the boundary check and broke the match.
