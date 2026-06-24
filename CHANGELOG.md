@@ -7,6 +7,9 @@
 - `/adex procs` — debug command that dumps the cached proc descriptions, so you can see what each weapon affix's normalized description looks like and which ones AffixDex has on file.
 - **Affix descriptions in the row tooltip.** Hovering an affix's icon or name in the grid now shows the affix's actual in-game spell description. For ranked affixes the tooltip describes the strongest version you've learned (or the highest rank known if you haven't learned any). Pulled from ProjectEbonhold's affix list automatically — nothing hard-coded.
 
+### Fixed (also in 1.6.0, pre-release iteration)
+- The proc-text matcher no longer misattributes random-suffix weapons. `Wand of Allistarj of Glaciation` was being flagged as Keeper's Sting because "ranged target" in the wand tooltip happened to substring-match Keeper's Sting's spell description. The matcher now (a) only runs on weapons that have NO random-property suffix (real fixed-affix candidates), and (b) requires the affix description to appear at the START of the item's tooltip line, not anywhere inside it.
+
 ## 1.5.3
 
 ### Fixed

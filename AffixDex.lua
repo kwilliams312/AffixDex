@@ -477,6 +477,10 @@ end
 -- caller) and return the canonical affix name whose proc description best
 -- matches. "Best" = longest normalized description matched, so a more specific
 -- affix beats a more generic one. nil if no match.
+-- Minimum normalized-description length to consider a match - guards against
+-- a single-word affix description ("Stuns") matching everything in sight.
+local PROC_MIN_DESC_LEN = 12
+
 local function detectFixedAffixByProc(numLines)
 	if affixProcDescriptionsStale then buildProcDescriptionCache() end
 	if not affixProcDescriptions or not next(affixProcDescriptions) then return nil end
@@ -490,9 +494,15 @@ local function detectFixedAffixByProc(numLines)
 			if normLine ~= "" then
 				for affixName, descData in pairs(affixProcDescriptions) do
 					local descNorm = descData.normalized
-					if descNorm ~= "" and (normLine == descNorm
-							or normLine:find(descNorm, 1, true)
-							or descNorm:find(normLine, 1, true)) then
+					-- Only match when the affix description appears at the
+					-- START of the item line (after normalisation strips the
+					-- "Chance on hit:" prefix). Proc text is always the start
+					-- of its line - substring-matching anywhere in the line
+					-- (e.g. "ranged target" being found mid-tooltip) is what
+					-- caused false positives like wands being attributed to
+					-- Keeper's Sting.
+					if descNorm ~= "" and #descNorm >= PROC_MIN_DESC_LEN
+							and normLine:find(descNorm, 1, true) == 1 then
 						local matchLen = #descNorm
 						if not bestLen or matchLen > bestLen then
 							bestName, bestLen = affixName, matchLen
@@ -751,11 +761,14 @@ local function parseItemAffix(link)
 	local n = tip:NumLines() or 0
 	if n == 0 then return nil end
 
-	-- Fixed-affix weapon detection: match the item's proc text against the
-	-- spell-description cache built from ProjectEbonhold's affix list. This
-	-- handles legendary/named weapons (Judge's Gavel, Stormherald, etc.) whose
-	-- tooltip shows the proc effect but never the affix name.
-	if allowWeapon then
+	-- Fixed-affix weapon detection runs ONLY for weapons WITHOUT a random
+	-- suffix. Items like "Wand of Allistarj of Glaciation" go through the
+	-- name-scan path below — running the proc matcher on them would risk a
+	-- false match (e.g. a "Ranged" tooltip line getting attributed to some
+	-- unrelated affix's description that mentions "ranged"). For real
+	-- fixed-affix legendary weapons (Judge's Gavel, etc.) there's no random
+	-- suffix and name-scan can't help anyway.
+	if allowWeapon and not hasRP then
 		local matchedAffix = detectFixedAffixByProc(n)
 		if matchedAffix then
 			local key = matchedAffix:lower()
