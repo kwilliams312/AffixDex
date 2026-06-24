@@ -478,8 +478,19 @@ end
 -- matches. "Best" = longest normalized description matched, so a more specific
 -- affix beats a more generic one. nil if no match.
 -- Minimum normalized-description length to consider a match - guards against
--- a single-word affix description ("Stuns") matching everything in sight.
+-- a short affix description matching anything that begins with the same words.
 local PROC_MIN_DESC_LEN = 12
+
+-- True only if the tooltip line is shaped like a weapon proc effect. Stat lines,
+-- set bonuses, flavor text, etc. must not be considered for proc matching.
+local function looksLikeProcLine(rawText)
+	if type(rawText) ~= "string" then return false end
+	local lower = rawText:lower()
+	-- Strip leading WoW color codes and whitespace.
+	lower = lower:gsub("^|c%x%x%x%x%x%x%x%x", ""):gsub("^%s+", "")
+	return lower:find("^chance on hit") ~= nil
+	    or lower:find("^chance to strike") ~= nil
+end
 
 local function detectFixedAffixByProc(numLines)
 	if affixProcDescriptionsStale then buildProcDescriptionCache() end
@@ -489,18 +500,15 @@ local function detectFixedAffixByProc(numLines)
 	for j = 1, numLines do
 		local lineObj = _G["AffixDexScanTooltipTextLeft" .. j]
 		local text = lineObj and lineObj.GetText and lineObj:GetText()
-		if text and text ~= "" then
+		if text and text ~= "" and looksLikeProcLine(text) then
 			local normLine = normalizeProcText(text)
 			if normLine ~= "" then
 				for affixName, descData in pairs(affixProcDescriptions) do
 					local descNorm = descData.normalized
-					-- Only match when the affix description appears at the
-					-- START of the item line (after normalisation strips the
-					-- "Chance on hit:" prefix). Proc text is always the start
-					-- of its line - substring-matching anywhere in the line
-					-- (e.g. "ranged target" being found mid-tooltip) is what
-					-- caused false positives like wands being attributed to
-					-- Keeper's Sting.
+					-- Description must appear at the START of the (normalised)
+					-- proc line. With the proc-line gate above, this is now a
+					-- pretty strong signal - the line is shaped like proc text,
+					-- and the affix description is its proc text.
 					if descNorm ~= "" and #descNorm >= PROC_MIN_DESC_LEN
 							and normLine:find(descNorm, 1, true) == 1 then
 						local matchLen = #descNorm
@@ -782,6 +790,15 @@ local function parseItemAffix(link)
 	-- (the name-based scan needs the suffix to be appended to the item name).
 	if not hasRP then return nil end
 
+	-- Helper: true if everything from position `pos` to end of `line` is only
+	-- trailing whitespace/punctuation. Affix suffixes always appear at the END
+	-- of a line, never mid-line - this prevents matches in set-bonus or
+	-- flavor-text lines like "Set: Increases Bladestorm damage by 10%".
+	local function isEndOfLine(line, pos)
+		local tail = line:sub(pos)
+		return tail == "" or tail:match("^[%s%.,;:!?%)%]]*$") ~= nil
+	end
+
 	for j = 1, n do
 		local lineObj = _G["AffixDexScanTooltipTextLeft" .. j]
 		local text = lineObj and lineObj.GetText and lineObj:GetText()
@@ -804,14 +821,24 @@ local function parseItemAffix(link)
 						local after  = lower:sub(e + 1, e + 1)
 						if (before == "" or not before:match("%w")) and (after == "" or not after:match("%w")) then
 							if isWeapon then
-								return canonical, nil, true
+								-- Weapon affix: must be at the END of this line.
+								-- (Rejects set-bonus lines like "Increases Bladestorm
+								-- damage by 10%" where the affix word appears mid-line.)
+								if isEndOfLine(lower, e + 1) then
+									return canonical, nil, true
+								end
+							else
+								-- Ranked: trailing Roman numeral that ends the line.
+								local rom = lower:sub(e + 1):match("^%s+([ivxlc]+)")
+								if rom and isRoman(rom) then
+									-- Find where the roman ends and check we're at EOL.
+									local romEnd = lower:find(rom, e + 1, true)
+									if romEnd and isEndOfLine(lower, romEnd + #rom) then
+										return canonical, rom:upper(), false
+									end
+								end
 							end
-							-- Ranked: trailing Roman numeral on the same line.
-							local rom = lower:sub(e + 1):match("^%s+([ivxlc]+)")
-							if rom and isRoman(rom) then
-								return canonical, rom:upper(), false
-							end
-							-- This occurrence had no Roman - try the next.
+							-- This occurrence had no Roman or wasn't at EOL - try next.
 						end
 						searchStart = e + 1
 					end

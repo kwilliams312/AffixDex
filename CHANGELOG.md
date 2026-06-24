@@ -8,7 +8,8 @@
 - **Affix descriptions in the row tooltip.** Hovering an affix's icon or name in the grid now shows the affix's actual in-game spell description. For ranked affixes the tooltip describes the strongest version you've learned (or the highest rank known if you haven't learned any). Pulled from ProjectEbonhold's affix list automatically — nothing hard-coded.
 
 ### Fixed (also in 1.6.0, pre-release iteration)
-- The proc-text matcher no longer misattributes random-suffix weapons. `Wand of Allistarj of Glaciation` was being flagged as Keeper's Sting because "ranged target" in the wand tooltip happened to substring-match Keeper's Sting's spell description. The matcher now (a) only runs on weapons that have NO random-property suffix (real fixed-affix candidates), and (b) requires the affix description to appear at the START of the item's tooltip line, not anywhere inside it.
+- The proc-text matcher no longer misattributes random-suffix weapons. `Wand of Allistarj of Glaciation` was being flagged as Keeper's Sting because "ranged target" in the wand tooltip happened to substring-match Keeper's Sting's spell description. The matcher now (a) only runs on weapons that have NO random-property suffix (real fixed-affix candidates), and (b) requires the matched line to start with "Chance on hit:"/"Chance to strike" AND the affix description to be the start of that line — set-bonus / stat / flavor text can't match anymore.
+- The name-scan no longer matches affix words **mid-line**. Items with set-bonus text like `Set: Increases Bladestorm damage by 10%` were being flagged as having the Bladestorm affix because the word appeared in the tooltip. Affix names are now only recognised when they appear at the **end of a line** (which is where the random suffix always sits), so set bonuses, flavor text, and class-ability mentions are ignored.
 
 ## 1.5.3
 
