@@ -737,10 +737,11 @@ local function parseItemAffix(link)
 	if type(link) ~= "string" or link == "" then return nil end
 	if not link:find("|H", 1, true) then return nil end           -- need a real link
 
-	-- Slot-based gate: ranked affixes only on armor/shirt/tabard/shield/jewelry,
-	-- weapon affixes only on weapons. Items in any other slot (non-equippable
-	-- things) are rejected outright. GetItemInfo cache misses (nil) fall through
-	-- and allow both families.
+	-- Slot-based gate: weapon affixes (procs like Bladestorm) only apply to
+	-- weapons, never armor. Ranked affixes can appear on EITHER weapons or
+	-- armor on Ebonhold (e.g. `Misery's End of Keen Strikes III` is a weapon
+	-- with a ranked affix). Items in non-equippable slots are rejected.
+	-- GetItemInfo cache misses (nil) fall through and allow both families.
 	local allowRanked, allowWeapon = true, true
 	if GetItemInfo then
 		local _, _, _, _, _, _, _, _, equipLoc = GetItemInfo(link)
@@ -748,7 +749,7 @@ local function parseItemAffix(link)
 			if EQUIP_RANKED[equipLoc] then
 				allowWeapon = false
 			elseif EQUIP_WEAPON[equipLoc] then
-				allowRanked = false
+				-- weapon slot: both ranked and weapon affixes allowed
 			else
 				return nil  -- ineligible slot (or non-equippable "")
 			end
