@@ -1,0 +1,112 @@
+name: Release
+
+# Triggers when you push a tag matching v* (e.g. `git tag v1.5.3 && git push origin v1.5.3`).
+# Verifies the tag matches the version in the .toc, packages a zip with the
+# addon files nested inside an AffixDex/ folder, and creates a GitHub Release
+# with the zip attached and the matching CHANGELOG section as the release notes.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Resolve version from tag
+        id: ver
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Tag version: $VERSION"
+
+      - name: Verify tag matches TOC ## Version
+        run: |
+          TOC_VERSION=$(awk -F': *' '/^## Version:/ {print $2}' AffixDex.toc | tr -d '\r')
+          TAG_VERSION="${{ steps.ver.outputs.version }}"
+          if [ "$TOC_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag is v$TAG_VERSION but AffixDex.toc says $TOC_VERSION — bump the TOC and re-tag."
+            exit 1
+          fi
+          echo "OK — TOC and tag both at $TOC_VERSION"
+
+      - name: Verify tag matches Lua fallback version
+        run: |
+          LUA_VERSION=$(grep -oP 'or "\K[0-9]+\.[0-9]+\.[0-9]+(?=")' AffixDex.lua | head -1)
+          TAG_VERSION="${{ steps.ver.outputs.version }}"
+          if [ "$LUA_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag is v$TAG_VERSION but AffixDex.lua fallback says $LUA_VERSION — bump the Lua fallback and re-tag."
+            exit 1
+          fi
+          echo "OK — Lua fallback also at $LUA_VERSION"
+
+      - name: Stage files into AffixDex/
+        run: |
+          mkdir -p staging/AffixDex
+          cp AffixDex.toc AffixDex.lua README.md CHANGELOG.md LICENSE staging/AffixDex/
+          ls -la staging/AffixDex/
+
+      - name: Build zip
+        run: |
+          cd staging
+          zip -r "../AffixDex-${{ steps.ver.outputs.version }}.zip" AffixDex
+          cd ..
+          unzip -l "AffixDex-${{ steps.ver.outputs.version }}.zip"
+
+      - name: Extract changelog section for this release
+        id: notes
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          # Pull the section between `## $VERSION` and the next `## ` heading.
+          awk -v ver="## $VERSION" '
+            $0 == ver { found=1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          # If extraction failed (empty notes), fall back to a generic message.
+          if [ ! -s release-notes.md ]; then
+            echo "Release $VERSION." > release-notes.md
+          fi
+          echo "--- release notes ---"
+          cat release-notes.md
+          echo "--- end ---"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: AffixDex ${{ steps.ver.outputs.version }}
+          body_path: release-notes.md
+          files: AffixDex-${{ steps.ver.outputs.version }}.zip
+          draft: false
+          prerelease: false
+
+      # ---------------------------------------------------------------------
+      # Future: post to Discord on release.
+      # Add a repository secret called DISCORD_WEBHOOK_URL and uncomment the
+      # step below. The webhook URL is created in Discord under:
+      # Server Settings -> Integrations -> Webhooks -> New Webhook.
+      # ---------------------------------------------------------------------
+      # - name: Announce on Discord
+      #   if: env.DISCORD_WEBHOOK_URL != ''
+      #   env:
+      #     DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      #   run: |
+      #     VERSION="${{ steps.ver.outputs.version }}"
+      #     NOTES=$(jq -Rs . < release-notes.md)
+      #     curl -H "Content-Type: application/json" -X POST "$DISCORD_WEBHOOK_URL" -d @- <<EOF
+      #     {
+      #       "content": "🧩 **AffixDex ${VERSION}** is out — https://github.com/kwilliams312/AffixDex/releases/tag/v${VERSION}",
+      #       "embeds": [{
+      #         "title": "AffixDex ${VERSION}",
+      #         "url": "https://github.com/kwilliams312/AffixDex/releases/tag/v${VERSION}",
+      #         "description": ${NOTES}
+      #       }]
+      #     }
+      #     EOF
