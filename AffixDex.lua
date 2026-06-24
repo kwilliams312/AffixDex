@@ -30,7 +30,7 @@ local ADDON = "AffixDex"
 
 -- Addon version (semver) - read from the .toc so it's a single source of truth.
 -- Bump this freely for any release (features, fixes, cosmetics).
-local VERSION = (GetAddOnMetadata and GetAddOnMetadata("AffixDex", "Version")) or "1.6.0"
+local VERSION = (GetAddOnMetadata and GetAddOnMetadata("AffixDex", "Version")) or "1.6.1"
 
 -- Wire-protocol version for party sharing - SEPARATE from the display version.
 -- Only bump this when the addon-message FORMAT or SEMANTICS change. Clients
